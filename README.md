@@ -78,7 +78,7 @@ Two rules sit on top of that.
 
 **A page can take away, never add.** The only ways a page changes intent state are removal: an element that stops existing is dropped from the selection (`gone`), and a document that navigates has its selection, tree and remembered panel state cleared.
 
-Two things are deliberately not in a store. The camera is applied to the DOM directly (one `transform`, one CSS variable), so panning and zooming re-render none of the 24 previews. Details for the inspector live in the component that shows them, keyed on the element, so they cannot outlive the selection they belong to.
+The camera lives in its store, but it is not rendered through React: a subscription writes it straight to the DOM (one `transform`, one CSS variable), so panning and zooming re-render none of the 24 previews. Details for the inspector are deliberately not in a store: they live in the component that shows them, keyed on the element, so they cannot outlive the selection they belong to.
 
 Layers state is kept per preview, which is what makes "switch to B and back to A" restore A's expanded rows; the panel's scroll offset is remembered the same way.
 
@@ -112,9 +112,13 @@ Everything is `postMessage`, typed in [`shared/protocol.ts`](frontend/src/shared
 | `track` | which elements to stream geometry and live values for |
 | `req` | `pick`, `children`, `step`, `search`, `reveal` |
 
-Geometry is measured in the agent once per frame while something is watched and sent only when it differs from the last send. Scroll (of the page or of any scroller in it), resize, layout shifts and animation all show up as a changed rectangle, so none of them needs its own listener. The host draws the outlines in screen pixels in a layer above the scaled board, which is why a line stays 1px or 2px and a label stays the same size at any zoom.
+While something is watched, the agent keeps exactly one animation-frame callback pending and measures on it; it also measures at once after a scroll it performed, a DOM change or a new watch list, without scheduling a second callback. A result is sent only when it differs from the last send. Scroll (of the page or of any scroller in it), resize, layout shifts and animation all show up as a changed rectangle, so none of them needs its own listener. The host draws the outlines in screen pixels in a layer above the scaled board, which is why a line stays 1px or 2px and a label stays the same size at any zoom.
 
-**How much traffic that is.** Messages are sent when something changed, at most once per frame, so traffic follows what the user is doing and not how many previews there are. Measured in Chrome: idle, about zero; one element selected on the page that rebuilds every 2 seconds, 2 messages a second; scrolling a page with a selection, about 6 KB a second. Wheel events are added up and sent once per frame, and element details from the API are cached for five minutes (failures are not cached, and the cache steps aside while the dev menu is injecting failures).
+**How much traffic that is.** Messages are sent only when something changed, usually about once per frame at most (the immediate measurements above can add one), so traffic follows what the user is doing and not how many previews there are. Measured in Chrome: idle, about zero; one element selected on the page that rebuilds every 2 seconds, 2 messages a second; scrolling a page with a selection, about 6 KB a second. Wheel events are added up and sent once per frame, and element details from the API are cached for five minutes (failures are not cached, and the cache steps aside while the dev menu is injecting failures).
+
+**Matching answers to questions.** Every request carries a request id (`rid`); the answer carries it back, and the timeout is keyed on it, so an answer can only ever resolve the request it belongs to, and one that arrives after its timeout is ignored.
+
+**When the user moves on.** Selection has its own ordering on top of that. A plain click, a row click, a keyboard step or Escape starts a new turn and aborts the clicks still waiting for an answer; an aborted request is cancelled, not failed, so it can neither come back and override the newer selection nor time out and fail the preview. Shift+clicks do not cancel each other: each is asked at once, and their answers are applied in the order the clicks were made.
 
 **When one side is slow.** Every request has a timeout: 3 seconds for a row's children and for search, 10 for the rest. A timeout fails the region that asked (that row, the layers panel, that preview) and nothing else. The first `hello` has 10 seconds. The host also fetches the page URL itself, so a missing page fails at once instead of after 10 seconds.
 
